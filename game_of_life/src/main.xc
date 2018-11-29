@@ -83,18 +83,6 @@ void DataInStream(char infname[], chanend c_out)
 //
 /////////////////////////////////////////////////////////////////////////////////////////
 
-
-//!!!!!!!!!!!!!!!!!NEEDS TO BE UPDATED FOR BITPACKING!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
-void readOutMap(unsigned int size, uchar map[IMHT][IMWD/8], chanend c_out) { //Sends map to dataOutStream.
-    for(int y = 0; y < IMHT; y++ ) {
-        for (int x = 0; x < IMWD/8; x++ ){
-            c_out <: map[y][x];
-        }
-    }
-}
-//!!!!!!!!!!!!!!!!!NEEDS TO BE UPDATED FOR BITPACKING!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
-
-
 uchar extractBit (uchar reg, int n) {//extracts bit value at n position.
     static uchar mask[] = {0x80, 0x40, 0x20, 0x10, 0x08, 0x04, 0x02, 0x01};
     if ((reg & mask[n]) != 0) return 255;
@@ -109,6 +97,19 @@ uchar extractCoordinate(uchar map[IMHT][IMWD/8], int x, int y) {
     uchar cell = extractBit(map[y][xRegister], xPos);
     return cell;
 }
+
+//!!!!!!!!!!!!!!!!!UPDATED FOR BITPACKING!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
+void readOutMap(unsigned int size, uchar map[IMHT][IMWD/8], chanend c_out) { //Sends map to dataOutStream.
+    for(int y = 0; y < IMHT; y++ ) {
+        for (int x = 0; x < IMWD/8; x++ ){
+            for (int bit = 0; bit < 8; bit ++){
+                //c_out <: extractCoordinate(map, ((8*x) + bit), y);
+                c_out <: extractBit(map[y][x], bit);
+            }
+        }
+    }
+}
+//!!!!!!!!!!!!!!!!!UPDATED FOR BITPACKING!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
 
 uchar calculateCellHelper(uchar grid[8], int alive) {
     int a = alive;
@@ -135,27 +136,25 @@ uchar calculateCellHelper(uchar grid[8], int alive) {
     return (uchar) a;
 }
 
-//!!!!!!!!!!!!!!!!!NEEDS TO BE UPDATED FOR BITPACKING!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
+//!!!!!!!!!!!!!!!!!UPDATED FOR BITPACKING!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
 uchar calculateCell(uchar map[IMHT][IMWD/8], int x, int y) { //'x' and 'y' refer to abstract map coordinates.
     int alive = extractCoordinate(map, x, y);
-    //if (alive == 255) alive = 1;
-    //uchar extractCoordinate(uchar map[IMHT][IMWD/8], int x, int y) {
 
     uchar surroundingCells[8];
     //topleft, topmiddle, topright, left, right, bottomleft, bottommiddle, bottomright.
-    surroundingCells[0] = map[(y - 1 + IMHT) % IMHT][(x - 1 + IMWD) % IMWD];
-    surroundingCells[1] = map[(y - 1 + IMHT) % IMHT][(x + IMWD) % IMWD];
-    surroundingCells[2] = map[(y - 1 + IMHT) % IMHT][(x + 1 + IMWD) % IMWD];
-    surroundingCells[3] = map[(y + IMHT) % IMHT][(x - 1 + IMWD) % IMWD];
-    surroundingCells[4] = map[(y + IMHT) % IMHT][(x + 1 + IMWD) % IMWD];
-    surroundingCells[5] = map[(y + 1 + IMHT) % IMHT][(x - 1 + IMWD) % IMWD];
-    surroundingCells[6] = map[(y + 1 + IMHT) % IMHT][(x + IMWD) % IMWD];
-    surroundingCells[7] = map[(y + 1 + IMHT) % IMHT][(x + 1 + IMWD) % IMWD];
+    surroundingCells[0] = extractCoordinate(map, ((x - 1 + IMWD) % IMWD), ((y - 1 + IMHT) % IMHT));
+    surroundingCells[1] = extractCoordinate(map, ((x + IMWD) % IMWD), ((y - 1 + IMHT) % IMHT));
+    surroundingCells[2] = extractCoordinate(map, ((x + 1 + IMWD) % IMWD), ((y - 1 + IMHT) % IMHT));
+    surroundingCells[3] = extractCoordinate(map, ((x - 1 + IMWD) % IMWD), ((y + IMHT) % IMHT));
+    surroundingCells[4] = extractCoordinate(map, ((x + 1 + IMWD) % IMWD), ((y + IMHT) % IMHT));
+    surroundingCells[5] = extractCoordinate(map, ((x - 1 + IMWD) % IMWD), ((y + 1 + IMHT) % IMHT));
+    surroundingCells[6] = extractCoordinate(map, ((x + IMWD) % IMWD), ((y + 1 + IMHT) % IMHT));
+    surroundingCells[7] = extractCoordinate(map, ((x + 1 + IMWD) % IMWD), ((y + 1 + IMHT) % IMHT));
 
     uchar calculatedCell = calculateCellHelper(surroundingCells, alive);
     return calculatedCell;
 }
-//!!!!!!!!!!!!!!!!!NEEDS TO BE UPDATED FOR BITPACKING!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
+//!!!!!!!!!!!!!!!!!UPDATED FOR BITPACKING!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
 
 
 /////////////////////////////////////////////////////////////////////////////////////////
@@ -197,11 +196,27 @@ void distributor(chanend c_in, chanend c_out, chanend fromAcc)
 
   //!!!!!!!!!!!!!!!!!NEEDS TO BE UPDATED FOR BITPACKING!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
   printf("Processing.\n" ); //Calculates next iteration of the map.
+
+  uchar calculatedRegister;
   for(int y = 0; y < IMHT; y++ ) {
-      for (int x = 0; x < IMWD; x++ ){  // for loop for 8 cells
-          targetMap[y][x] = calculateCell(currentMap, x, y);
+      for (int x = 0; x < IMWD/8; x++ ){  // for loop for 8 cells
+          calculatedRegister = 0;
+          for (int bit = 1; bit < 9; bit ++){
+              if (calculateCell(currentMap, (x*8+bit-1), y) == 255){
+                  calculatedRegister |= (0x01 << (8 - bit));
+              }
+          }
+          targetMap[y][x] = calculatedRegister;
       }
   }
+
+//  uchar target = 0;
+//  for (int position = 1; position < 9; position++){ //bitpacks the map as it is read in.
+//      c_in :> val;
+//      if (val == 255){
+//          target |= (0x01 << (8 - position));
+//      }
+//  }
   //!!!!!!!!!!!!!!!!!NEEDS TO BE UPDATED FOR BITPACKING!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
 
   readOutMap(IMHT*IMWD, targetMap, c_out);
