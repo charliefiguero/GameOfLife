@@ -106,8 +106,8 @@ uchar extractCoordinate(uchar map[IMHT][IMWD/8], int x, int y) {
     int xRegister = x / 8;
     int xPos = x % 8;
 
-    uchar bit = extractBit(map[y][xRegister], xPos);
-    return bit;
+    uchar cell = extractBit(map[y][xRegister], xPos);
+    return cell;
 }
 
 uchar calculateCellHelper(uchar grid[8], int alive) {
@@ -136,9 +136,10 @@ uchar calculateCellHelper(uchar grid[8], int alive) {
 }
 
 //!!!!!!!!!!!!!!!!!NEEDS TO BE UPDATED FOR BITPACKING!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
-uchar calculateCell(uchar map[IMHT][IMWD/8], int x, int y) { //'x' and 'y' refer to middle cell.
-    int alive = map[y][x];
+uchar calculateCell(uchar map[IMHT][IMWD/8], int x, int y) { //'x' and 'y' refer to abstract map coordinates.
+    int alive = extractCoordinate(map, x, y);
     //if (alive == 255) alive = 1;
+    //uchar extractCoordinate(uchar map[IMHT][IMWD/8], int x, int y) {
 
     uchar surroundingCells[8];
     //topleft, topmiddle, topright, left, right, bottomleft, bottommiddle, bottomright.
@@ -197,7 +198,7 @@ void distributor(chanend c_in, chanend c_out, chanend fromAcc)
   //!!!!!!!!!!!!!!!!!NEEDS TO BE UPDATED FOR BITPACKING!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
   printf("Processing.\n" ); //Calculates next iteration of the map.
   for(int y = 0; y < IMHT; y++ ) {
-      for (int x = 0; x < IMWD; x++ ){
+      for (int x = 0; x < IMWD; x++ ){  // for loop for 8 cells
           targetMap[y][x] = calculateCell(currentMap, x, y);
       }
   }
