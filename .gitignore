@@ -1,0 +1,18 @@
+
+
+# Ignore everything
+*
+
+# But descend into directories
+!*/
+
+# Recursively allow files under subtree
+!/game_of_life/**
+!/lib_i2c/**
+!/lib_logging/**
+!/lib_xassert/**
+
+game_of_life/bin/
+
+!.gitignore
+
