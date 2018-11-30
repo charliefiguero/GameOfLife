@@ -9,8 +9,8 @@
 #include "pgmIO.h"
 #include "i2c.h"
 
-#define  IMHT 16                  //image height
-#define  IMWD 16                  //image width
+#define  IMHT 64                   //image height
+#define  IMWD 64                   //image width
 
 typedef unsigned char uchar;      //using uchar as shorthand
 
@@ -71,9 +71,9 @@ void DataInStream(char infname[], chanend c_out)
     _readinline( line, IMWD );
     for( int x = 0; x < IMWD; x++ ) {
       c_out <: line[ x ];
-      printf( "-%4.1d ", line[ x ] ); //show image values
+      //printf( "-%4.1d ", line[ x ] ); //show image values
     }
-    printf( "\n" );
+    //printf( "\n" );
   }
 
   //Close PGM image file
@@ -252,6 +252,8 @@ void distributor(chanend c_in, chanend c_out, chanend fromAcc, chanend fromButto
           select {
               case fromButtons :> value:
                   if (value == 13) {
+
+                      printf("Reading out map.\n");
                       if ((round % 2) == 0){
                           readOutMap(imageA, c_out);
                       }
@@ -397,7 +399,7 @@ int main(void) {
 
 i2c_master_if i2c[1];               //interface to orientation
 
-char infname[] = "game_of_life/test.pgm";     //put your input image path here
+char infname[] = "game_of_life/64x64.pgm";     //put your input image path here
 char outfname[] = "game_of_life/testout.pgm"; //put your output image path here
 chan c_inIO, c_outIO, c_control, c_buttons;    //extend your channel definitions here
 
