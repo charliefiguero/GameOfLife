@@ -5,6 +5,7 @@
 #include <xs1.h>
 #include <stdio.h>
 #include <assert.h>
+//#include "xcore_c.h"
 #include "pgmIO.h"
 #include "i2c.h"
 
@@ -23,6 +24,9 @@ typedef unsigned char uchar;      //using uchar as shorthand
 #define BIT2 0x40
 #define BIT1 0x80
 const uchar bits[8] = {BIT1, BIT2, BIT3, BIT4, BIT5, BIT6, BIT7, BIT8};
+
+on tile[0] : in port buttons = XS1_PORT_4E; //port to access xCore-200 buttons
+on tile[0] : out port leds = XS1_PORT_4F;   //port to access xCore-200 LEDs
 
 struct coordinates {
     int x;
@@ -83,7 +87,7 @@ void DataInStream(char infname[], chanend c_out)
 //
 /////////////////////////////////////////////////////////////////////////////////////////
 
-uchar extractBit (uchar reg, int n) {//extracts bit value at n position.
+uchar extractBit (uchar reg, int n) {//extracts bit value at 'n' position of register 'reg'.
     static uchar mask[] = {0x80, 0x40, 0x20, 0x10, 0x08, 0x04, 0x02, 0x01};
     if ((reg & mask[n]) != 0) return 255;
     else return 0;
@@ -98,8 +102,7 @@ uchar extractCoordinate(uchar map[IMHT][IMWD/8], int x, int y) {
     return cell;
 }
 
-//!!!!!!!!!!!!!!!!!UPDATED FOR BITPACKING!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
-void readOutMap(unsigned int size, uchar map[IMHT][IMWD/8], chanend c_out) { //Sends map to dataOutStream.
+void readOutMap(uchar map[IMHT][IMWD/8], chanend c_out) { //Sends map to dataOutStream.
     for(int y = 0; y < IMHT; y++ ) {
         for (int x = 0; x < IMWD/8; x++ ){
             for (int bit = 0; bit < 8; bit ++){
@@ -109,7 +112,6 @@ void readOutMap(unsigned int size, uchar map[IMHT][IMWD/8], chanend c_out) { //S
         }
     }
 }
-//!!!!!!!!!!!!!!!!!UPDATED FOR BITPACKING!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
 
 uchar calculateCellHelper(uchar grid[8], int alive) {
     int a = alive;
@@ -136,7 +138,6 @@ uchar calculateCellHelper(uchar grid[8], int alive) {
     return (uchar) a;
 }
 
-//!!!!!!!!!!!!!!!!!UPDATED FOR BITPACKING!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
 uchar calculateCell(uchar map[IMHT][IMWD/8], int x, int y) { //'x' and 'y' refer to abstract map coordinates.
     int alive = extractCoordinate(map, x, y);
 
@@ -154,8 +155,21 @@ uchar calculateCell(uchar map[IMHT][IMWD/8], int x, int y) { //'x' and 'y' refer
     uchar calculatedCell = calculateCellHelper(surroundingCells, alive);
     return calculatedCell;
 }
-//!!!!!!!!!!!!!!!!!UPDATED FOR BITPACKING!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
 
+void calculateMap(uchar mapA[IMHT][IMWD/8], uchar mapB[IMHT][IMWD/8]){
+        uchar calculatedRegister;
+        for(int y = 0; y < IMHT; y++ ) {
+            for (int x = 0; x < IMWD/8; x++ ){  // for loop for 8 cells
+                calculatedRegister = 0;
+                for (int bit = 1; bit < 9; bit ++){
+                    if (calculateCell(mapA, (x*8+bit-1), y) == 255){
+                        calculatedRegister |= (0x01 << (8 - bit));
+                    }
+                }
+                mapB[y][x] = calculatedRegister;
+            }
+        }
+}
 
 /////////////////////////////////////////////////////////////////////////////////////////
 //
@@ -168,8 +182,9 @@ uchar calculateCell(uchar map[IMHT][IMWD/8], int x, int y) { //'x' and 'y' refer
 void distributor(chanend c_in, chanend c_out, chanend fromAcc)
 {
   uchar val;
-  uchar currentMap[IMHT][IMWD/8]; //Used by 'calculateCell'.
-  uchar targetMap[IMHT][IMWD/8]; //New cell states are written here.
+  uchar imageA[IMHT][IMWD/8]; //imageA is originally read from and imageB written to...
+  uchar imageB[IMHT][IMWD/8]; //...they swap each iteration.
+  int round;
 
   //Starting up and wait for tilting of the xCore-200 Explorer
   printf( "ProcessImage: Start, size = %dx%d\n", IMHT, IMWD );
@@ -178,7 +193,6 @@ void distributor(chanend c_in, chanend c_out, chanend fromAcc)
 
   printf( "Reading in map.\n" );
 
-  //!!!!!!!!!!!!!!!!!!!!!!!!!!!CHANGED SINCE TESTING!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
   for(int y = 0; y < IMHT; y++ ) {   //Reads in pgm, cell by cell.
       for (int x = 0; x < (IMWD / 8); x++){
           uchar target = 0;
@@ -189,40 +203,33 @@ void distributor(chanend c_in, chanend c_out, chanend fromAcc)
               }
           }
 
-          currentMap[y][x] = target;
+          imageA[y][x] = target;
       }
   }
-  //!!!!!!!!!!!!!!!!!!!!!!!!!!!CHANGED SINCE TESTING!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
 
-  //!!!!!!!!!!!!!!!!!NEEDS TO BE UPDATED FOR BITPACKING!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
   printf("Processing.\n" ); //Calculates next iteration of the map.
 
-  uchar calculatedRegister;
-  for(int y = 0; y < IMHT; y++ ) {
-      for (int x = 0; x < IMWD/8; x++ ){  // for loop for 8 cells
-          calculatedRegister = 0;
-          for (int bit = 1; bit < 9; bit ++){
-              if (calculateCell(currentMap, (x*8+bit-1), y) == 255){
-                  calculatedRegister |= (0x01 << (8 - bit));
-              }
+      for (round = 0; round < 2; round++){
+          if ((round % 2) == 0){
+              calculateMap(imageA, imageB);
           }
-          targetMap[y][x] = calculatedRegister;
+          else {
+              calculateMap(imageB, imageA);
+          }
+          printf( "\nProcessing round: %d completed...\n", round);
       }
-  }
 
-//  uchar target = 0;
-//  for (int position = 1; position < 9; position++){ //bitpacks the map as it is read in.
-//      c_in :> val;
-//      if (val == 255){
-//          target |= (0x01 << (8 - position));
-//      }
-//  }
-  //!!!!!!!!!!!!!!!!!NEEDS TO BE UPDATED FOR BITPACKING!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
-
-  readOutMap(IMHT*IMWD, targetMap, c_out);
-
-  printf( "\nOne processing round completed...\n" );
+      //Reads out correct image to 'testout.pgm' after image calculations finish
+      if ((round % 2) == 0){
+          readOutMap(imageA, c_out);
+      }
+      else {
+          readOutMap(imageB, c_out);
+      }
 }
+
+
+//void readOutMap(unsigned int size, uchar map[IMHT][IMWD/8], chanend c_out) { //Sends map to dataOutStream.
 
 /////////////////////////////////////////////////////////////////////////////////////////
 //
