@@ -87,6 +87,29 @@ void DataInStream(char infname[], chanend c_out)
 //
 /////////////////////////////////////////////////////////////////////////////////////////
 
+/////////////////////////////////////////////////////////////////////////////////////////
+//
+// I/O Functions
+//
+/////////////////////////////////////////////////////////////////////////////////////////
+
+//READ BUTTONS and send button pattern
+void buttonListener(in port b, chanend toDistributor) { //13 = 'SW2', 14 = 'SW1'
+  int r;
+  while (1) {
+    b when pinseq(15)  :> r;    // check that no button is pressed
+    b when pinsneq(15) :> r;    // check if some buttons are pressed
+    if ((r==13) || (r==14))     // if either button is pressed
+    toDistributor <: r;             // send button pattern to 'distributor'
+  }
+}
+
+/////////////////////////////////////////////////////////////////////////////////////////
+//
+// Logic Functions
+//
+/////////////////////////////////////////////////////////////////////////////////////////
+
 uchar extractBit (uchar reg, int n) {//extracts bit value at 'n' position of register 'reg'.
     static uchar mask[] = {0x80, 0x40, 0x20, 0x10, 0x08, 0x04, 0x02, 0x01};
     if ((reg & mask[n]) != 0) return 255;
@@ -179,21 +202,27 @@ void calculateMap(uchar mapA[IMHT][IMWD/8], uchar mapB[IMHT][IMWD/8]){
 //
 /////////////////////////////////////////////////////////////////////////////////////////
 
-void distributor(chanend c_in, chanend c_out, chanend fromAcc)
+void distributor(chanend c_in, chanend c_out, chanend fromAcc, chanend fromButtons)
 {
   uchar val;
   uchar imageA[IMHT][IMWD/8]; //imageA is originally read from and imageB written to...
   uchar imageB[IMHT][IMWD/8]; //...they swap each iteration.
-  int round;
+  int round = 0;
 
-  //Starting up and wait for tilting of the xCore-200 Explorer
+  //Starting up and wait for SW1 press
   printf( "ProcessImage: Start, size = %dx%d\n", IMHT, IMWD );
-  printf( "Waiting for Board Tilt...\n" );
-  fromAcc :> int value;
+  printf( "Waiting for 'SW1' button press...\n" );
+
+  int value = 15;
+  while(value != 14) {   //Wait for 'SW1' from buttonListener to start processing
+      fromButtons :> value;
+  }
+  value = 15;
 
   printf( "Reading in map.\n" );
 
-  for(int y = 0; y < IMHT; y++ ) {   //Reads in pgm, cell by cell.
+  //Reads in pgm, cell by cell.
+  for(int y = 0; y < IMHT; y++ ) {
       for (int x = 0; x < (IMWD / 8); x++){
           uchar target = 0;
           for (int position = 1; position < 9; position++){ //bitpacks the map as it is read in.
@@ -209,7 +238,8 @@ void distributor(chanend c_in, chanend c_out, chanend fromAcc)
 
   printf("Processing.\n" ); //Calculates next iteration of the map.
 
-      for (round = 0; round < 2; round++){
+      int running = 1;
+      while(running){
           if ((round % 2) == 0){
               calculateMap(imageA, imageB);
           }
@@ -217,19 +247,26 @@ void distributor(chanend c_in, chanend c_out, chanend fromAcc)
               calculateMap(imageB, imageA);
           }
           printf( "\nProcessing round: %d completed...\n", round);
-      }
 
-      //Reads out correct image to 'testout.pgm' after image calculations finish
-      if ((round % 2) == 0){
-          readOutMap(imageA, c_out);
-      }
-      else {
-          readOutMap(imageB, c_out);
+          //wait for 'SW2' from buttonListener
+          select {
+              case fromButtons :> value:
+                  if (value == 13) {
+                      if ((round % 2) == 0){
+                          readOutMap(imageA, c_out);
+                      }
+                      else {
+                          readOutMap(imageB, c_out);
+                      }
+                  }
+                  running = 0;
+                  break;
+              default:
+                  break;
+          }
+          round++;
       }
 }
-
-
-//void readOutMap(unsigned int size, uchar map[IMHT][IMWD/8], chanend c_out) { //Sends map to dataOutStream.
 
 /////////////////////////////////////////////////////////////////////////////////////////
 //
@@ -238,30 +275,30 @@ void distributor(chanend c_in, chanend c_out, chanend fromAcc)
 /////////////////////////////////////////////////////////////////////////////////////////
 void DataOutStream(char outfname[], chanend c_in)
 {
-  int res;
-  uchar line[ IMWD ];
+      int res;
+      uchar line[ IMWD ];
 
-  //Open PGM file
-  printf( "DataOutStream: Start...\n" );
-  res = _openoutpgm( outfname, IMWD, IMHT );
-  if( res ) {
-    printf( "DataOutStream: Error opening %s\n.", outfname );
-    return;
-  }
+      //Open PGM file
+      printf( "DataOutStream: Start...\n" );
+      res = _openoutpgm( outfname, IMWD, IMHT );
+      if( res ) {
+        printf( "DataOutStream: Error opening %s\n.", outfname );
+        return;
+      }
 
-  //Compile each line of the image and write the image line-by-line
-  for( int y = 0; y < IMHT; y++ ) {
-    for( int x = 0; x < IMWD; x++ ) {
-      c_in :> line[ x ];
-    }
-    _writeoutline( line, IMWD );
-    //printf( "DataOutStream: Line written...\n" );
-  }
+      //Compile each line of the image and write the image line-by-line
+      for( int y = 0; y < IMHT; y++ ) {
+        for( int x = 0; x < IMWD; x++ ) {
+          c_in :> line[ x ];
+        }
+        _writeoutline( line, IMWD );
+        //printf( "DataOutStream: Line written...\n" );
+      }
 
-  //Close the PGM image
-  _closeoutpgm();
-  printf( "DataOutStream: Done...\n" );
-  return;
+      //Close the PGM image
+      _closeoutpgm();
+      printf( "DataOutStream: Done...\n" );
+      return;
 }
 
 /////////////////////////////////////////////////////////////////////////////////////////
@@ -362,14 +399,15 @@ i2c_master_if i2c[1];               //interface to orientation
 
 char infname[] = "game_of_life/test.pgm";     //put your input image path here
 char outfname[] = "game_of_life/testout.pgm"; //put your output image path here
-chan c_inIO, c_outIO, c_control;    //extend your channel definitions here
+chan c_inIO, c_outIO, c_control, c_buttons;    //extend your channel definitions here
 
 par {
     i2c_master(i2c, 1, p_scl, p_sda, 10);   //server thread providing orientation data
     orientation(i2c[0],c_control);        //client thread reading orientation data
     DataInStream(infname, c_inIO);          //thread to read in a PGM image
     DataOutStream(outfname, c_outIO);       //thread to write out a PGM image
-    distributor(c_inIO, c_outIO, c_control);//thread to coordinate work on image
+    distributor(c_inIO, c_outIO, c_control, c_buttons);//thread to coordinate work on image
+    buttonListener(buttons, c_buttons); //thread to listen for button presses
   }
 
 
