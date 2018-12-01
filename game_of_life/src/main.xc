@@ -9,8 +9,8 @@
 #include "pgmIO.h"
 #include "i2c.h"
 
-#define  IMHT 64                   //image height
-#define  IMWD 64                   //image width
+#define  IMHT 512                   //image height
+#define  IMWD 512                   //image width
 
 typedef unsigned char uchar;      //using uchar as shorthand
 
@@ -104,6 +104,39 @@ void buttonListener(in port b, chanend toDistributor) { //13 = 'SW2', 14 = 'SW1'
   }
 }
 
+//DISPLAYS an LED pattern
+int showLEDs(out port p, chanend fromDistributor) {
+  int pattern; //1st bit...separate green LED
+               //2nd bit...blue LED (2)
+               //3rd bit...green LED (4)
+               //4th bit...red LED (8)
+  while (1) {
+    fromDistributor :> pattern;   //receive new pattern from visualiser
+    p <: pattern;                //send pattern to LED port
+  }
+  return 0;
+}
+
+//void longTimer(chanend fromDistributor){
+//
+//    long startTime;
+//    long endTime;
+//    timer t;
+////    timer t;
+////    t :> startTime;
+////    t :> endTime;
+////    (40 * 1000000) / XS1_TIMER_MHZ
+////    int elapsed; // as measured from timers
+////    double elapsed_us = elapsed / (double)XS1_TIMER_MHZ;
+////    double elapsed_ms = elapsed_us * 1000;
+//
+//    fromDistributor :> int received;
+//    t :> startTime;
+//    while (1){
+//        if ()
+//    }
+//}
+
 /////////////////////////////////////////////////////////////////////////////////////////
 //
 // Logic Functions
@@ -194,6 +227,20 @@ void calculateMap(uchar mapA[IMHT][IMWD/8], uchar mapB[IMHT][IMWD/8]){
         }
 }
 
+int numLiveCells(uchar map[IMHT][IMWD/8]){
+
+    int liveCells = 0;
+    uchar alive = 0;
+    for (int y = 0; y < IMHT; y++){
+        for (int x = 0; x < IMWD; x++){
+            alive = extractCoordinate(map, x, y);
+            if (alive == 255) liveCells ++;
+        }
+
+    }
+    return liveCells;
+}
+
 /////////////////////////////////////////////////////////////////////////////////////////
 //
 // Start your implementation by changing this function to implement the game of life
@@ -202,17 +249,20 @@ void calculateMap(uchar mapA[IMHT][IMWD/8], uchar mapB[IMHT][IMWD/8]){
 //
 /////////////////////////////////////////////////////////////////////////////////////////
 
-void distributor(chanend c_in, chanend c_out, chanend fromAcc, chanend fromButtons)
+void distributor(chanend c_in, chanend c_out, chanend fromAcc, chanend fromButtons, chanend toLED)
 {
   uchar val;
   uchar imageA[IMHT][IMWD/8]; //imageA is originally read from and imageB written to...
   uchar imageB[IMHT][IMWD/8]; //...they swap each iteration.
   int round = 0;
+  int orientation = 0;
+  int numberLiveCells = 0;
 
   //Starting up and wait for SW1 press
   printf( "ProcessImage: Start, size = %dx%d\n", IMHT, IMWD );
   printf( "Waiting for 'SW1' button press...\n" );
 
+  int patternLED = 0;
   int value = 15;
   while(value != 14) {   //Wait for 'SW1' from buttonListener to start processing
       fromButtons :> value;
@@ -220,6 +270,8 @@ void distributor(chanend c_in, chanend c_out, chanend fromAcc, chanend fromButto
   value = 15;
 
   printf( "Reading in map.\n" );
+  patternLED = 4;
+  toLED <: patternLED;
 
   //Reads in pgm, cell by cell.
   for(int y = 0; y < IMHT; y++ ) {
@@ -236,14 +288,42 @@ void distributor(chanend c_in, chanend c_out, chanend fromAcc, chanend fromButto
       }
   }
 
+  patternLED = 0;
+  toLED <: patternLED;
+  printf("Image read out succesfully.\n");
   printf("Processing.\n" ); //Calculates next iteration of the map.
 
       int running = 1;
       while(running){
+
+          //Pauses if tilted.
+          fromAcc :> orientation;
+          if (orientation == 1){
+              printf("\nProcessing paused.\n");
+              printf("%d rounds processed.\n", round - 1);
+              if ((round % 2) == 0){
+                  numberLiveCells = numLiveCells(imageA);
+              }
+              else {
+                  numberLiveCells = numLiveCells(imageB);
+              }
+              printf("There are currently %d live cells.\n\n", numberLiveCells);
+
+              patternLED = 8;
+              toLED <: patternLED;
+              while(orientation){
+                  fromAcc :> orientation;
+              }
+          }
+
           if ((round % 2) == 0){
+              patternLED = 0;
+              toLED <: patternLED;
               calculateMap(imageA, imageB);
           }
           else {
+              patternLED = 1;
+              toLED <: patternLED;
               calculateMap(imageB, imageA);
           }
           printf( "\nProcessing round: %d completed...\n", round);
@@ -253,13 +333,19 @@ void distributor(chanend c_in, chanend c_out, chanend fromAcc, chanend fromButto
               case fromButtons :> value:
                   if (value == 13) {
 
+                      //update LEDs
+                      patternLED = 2;
+                      toLED <: patternLED;
                       printf("Reading out map.\n");
+
                       if ((round % 2) == 0){
                           readOutMap(imageA, c_out);
                       }
                       else {
                           readOutMap(imageB, c_out);
                       }
+                      patternLED = 0;
+                      toLED <: patternLED;
                   }
                   running = 0;
                   break;
@@ -311,7 +397,7 @@ void DataOutStream(char outfname[], chanend c_in)
 void orientation( client interface i2c_master_if i2c, chanend toDist) {
   i2c_regop_res_t result;
   char status_data = 0;
-  int tilted = 0;
+//  int tilted = 0;
 
   // Configure FXOS8700EQ
   result = i2c.write_reg(FXOS8700EQ_I2C_ADDR, FXOS8700EQ_XYZ_DATA_CFG_REG, 0x01);
@@ -337,12 +423,13 @@ void orientation( client interface i2c_master_if i2c, chanend toDist) {
     int x = read_acceleration(i2c, FXOS8700EQ_OUT_X_MSB);
 
     //send signal to distributor after first tilt
-    if (!tilted) {
-      if (x>30) {
-        tilted = 1 - tilted;
+      if (x>30 || x < -30) {
+        //tilted = 1 - tilted;
         toDist <: 1;
       }
-    }
+      else{
+        toDist <: 0;
+      }
   }
 }
 
@@ -399,17 +486,18 @@ int main(void) {
 
 i2c_master_if i2c[1];               //interface to orientation
 
-char infname[] = "game_of_life/64x64.pgm";     //put your input image path here
+char infname[] = "game_of_life/512x512.pgm";     //put your input image path here
 char outfname[] = "game_of_life/testout.pgm"; //put your output image path here
-chan c_inIO, c_outIO, c_control, c_buttons;    //extend your channel definitions here
+chan c_inIO, c_outIO, c_control, c_buttons, c_LEDs;    //extend your channel definitions here
 
 par {
     i2c_master(i2c, 1, p_scl, p_sda, 10);   //server thread providing orientation data
     orientation(i2c[0],c_control);        //client thread reading orientation data
     DataInStream(infname, c_inIO);          //thread to read in a PGM image
     DataOutStream(outfname, c_outIO);       //thread to write out a PGM image
-    distributor(c_inIO, c_outIO, c_control, c_buttons);//thread to coordinate work on image
+    distributor(c_inIO, c_outIO, c_control, c_buttons, c_LEDs);//thread to coordinate work on image
     buttonListener(buttons, c_buttons); //thread to listen for button presses
+    showLEDs(leds, c_LEDs);
   }
 
 
