@@ -9,8 +9,8 @@
 #include "pgmIO.h"
 #include "i2c.h"
 
-#define  IMHT 512                   //image height
-#define  IMWD 512                   //image width
+#define  IMHT 128                   //image height
+#define  IMWD 128                   //image width
 
 typedef unsigned char uchar;      //using uchar as shorthand
 
@@ -100,7 +100,7 @@ void buttonListener(in port b, chanend toDistributor) { //13 = 'SW2', 14 = 'SW1'
     b when pinseq(15)  :> r;    // check that no button is pressed
     b when pinsneq(15) :> r;    // check if some buttons are pressed
     if ((r==13) || (r==14))     // if either button is pressed
-    toDistributor <: r;             // send button pattern to 'distributor'
+    toDistributor <: r;         // send button pattern to 'distributor'
   }
 }
 
@@ -117,25 +117,43 @@ int showLEDs(out port p, chanend fromDistributor) {
   return 0;
 }
 
-//void longTimer(chanend fromDistributor){
+//Timer which records for longer than 42 seconds.
+//To read from timer: 1)Handshake to start timer.
+//                    2)Send '2' over channel.
+//                    3)Wait to receive time as type 'long', in ms
 //
-//    long startTime;
-//    long endTime;
-//    timer t;
-////    timer t;
-////    t :> startTime;
-////    t :> endTime;
-////    (40 * 1000000) / XS1_TIMER_MHZ
-////    int elapsed; // as measured from timers
-////    double elapsed_us = elapsed / (double)XS1_TIMER_MHZ;
-////    double elapsed_ms = elapsed_us * 1000;
-//
-//    fromDistributor :> int received;
-//    t :> startTime;
-//    while (1){
-//        if ()
-//    }
-//}
+//To pause and read from timer: 1)Handshake to start timer.
+//                              2)Send '1' over channel, this pauses the timer.
+//                              3)Wait to receive the elapsed time.
+//                              4)Handshake timer to resume.
+void longTimer(chanend fromDistributor){ //
+    timer t;
+    long cumulativeTime = 0;
+
+    fromDistributor :> int received; //Starts the timer.
+    t :> startTime;
+    while (1){
+        select {
+            case fromDistributor :> int request:
+                if (request == 1) { //Reading from longTimer.
+                    fromDistributor <: (cumulativeTime + ((t * 1000) / XS1_TIMER_MHZ)) - startTime;
+                }
+                else {//Pause longTimer and give reading.
+                    fromDistributor <: (cumulativeTime + ((t * 1000) / XS1_TIMER_MHZ)) - startTime;
+                    cumulativeTime += (t * 1000) / XS1_TIMER_MHZ;
+                    fromDistributor :> int resume;
+                    t = 0;
+                }
+                break;
+            default :
+                if (t > (40 * 1000) / XS1_TIMER_MHZ) {
+                    t -= (40 * 1000) / XS1_TIMER_MHZ;
+                    cumulativeTime += (40 * 1000) / XS1_TIMER_MHZ;
+                }
+                break;
+        }
+    }
+}
 
 /////////////////////////////////////////////////////////////////////////////////////////
 //
@@ -249,7 +267,8 @@ int numLiveCells(uchar map[IMHT][IMWD/8]){
 //
 /////////////////////////////////////////////////////////////////////////////////////////
 
-void distributor(chanend c_in, chanend c_out, chanend fromAcc, chanend fromButtons, chanend toLED)
+void distributor(chanend c_in, chanend c_out, chanend fromAcc, chanend fromButtons,
+        chanend toLED, chanend fromTimer)
 {
   uchar val;
   uchar imageA[IMHT][IMWD/8]; //imageA is originally read from and imageB written to...
@@ -291,6 +310,9 @@ void distributor(chanend c_in, chanend c_out, chanend fromAcc, chanend fromButto
   patternLED = 0;
   toLED <: patternLED;
   printf("Image read out succesfully.\n");
+
+  //fromTimer :>
+
   printf("Processing.\n" ); //Calculates next iteration of the map.
 
       int running = 1;
@@ -486,18 +508,19 @@ int main(void) {
 
 i2c_master_if i2c[1];               //interface to orientation
 
-char infname[] = "game_of_life/512x512.pgm";     //put your input image path here
+char infname[] = "game_of_life/128x128.pgm";     //put your input image path here
 char outfname[] = "game_of_life/testout.pgm"; //put your output image path here
-chan c_inIO, c_outIO, c_control, c_buttons, c_LEDs;    //extend your channel definitions here
+chan c_inIO, c_outIO, c_control, c_buttons, c_LEDs, c_timer;    //extend your channel definitions here
 
 par {
     i2c_master(i2c, 1, p_scl, p_sda, 10);   //server thread providing orientation data
     orientation(i2c[0],c_control);        //client thread reading orientation data
     DataInStream(infname, c_inIO);          //thread to read in a PGM image
     DataOutStream(outfname, c_outIO);       //thread to write out a PGM image
-    distributor(c_inIO, c_outIO, c_control, c_buttons, c_LEDs);//thread to coordinate work on image
+    distributor(c_inIO, c_outIO, c_control, c_buttons, c_LEDs, c_timer);//thread to coordinate work on image
     buttonListener(buttons, c_buttons); //thread to listen for button presses
     showLEDs(leds, c_LEDs);
+    longTimer(c_timer);
   }
 
 
