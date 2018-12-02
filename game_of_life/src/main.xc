@@ -9,8 +9,10 @@
 #include "pgmIO.h"
 #include "i2c.h"
 
-#define  IMHT 128                   //image height
-#define  IMWD 128                   //image width
+#define  IMHT 64                   //image height
+#define  IMWD 64                   //image width
+#define  maxTicks 4294967295       //size of int
+#define  maxTicksMS 42950          //size of int to ms precision
 
 typedef unsigned char uchar;      //using uchar as shorthand
 
@@ -117,39 +119,56 @@ int showLEDs(out port p, chanend fromDistributor) {
   return 0;
 }
 
-//Timer which records for longer than 42 seconds.
-//To read from timer: 1)Handshake to start timer.
-//                    2)Send '2' over channel.
-//                    3)Wait to receive time as type 'long', in ms
-//
-//To pause and read from timer: 1)Handshake to start timer.
-//                              2)Send '1' over channel, this pauses the timer.
-//                              3)Wait to receive the elapsed time.
-//                              4)Handshake timer to resume.
+//(smallTimer * 1000) / XS1_TIMER_MHZ)
+//Dont send 2 request before 1 please.
 void longTimer(chanend fromDistributor){ //
     timer t;
-    long cumulativeTime = 0;
+    unsigned int startTime = 0;
+    unsigned int ticker = 0;
+    unsigned int oldTicker = 0;
+    unsigned int loopCount = 0;
+    //unsigned long long pausedTime, startCumulativeTime, endCumulativeTime = 0;
+    unsigned int pausedTime, startCumulativeTime, endCumulativeTime = 0;
 
-    fromDistributor :> int received; //Starts the timer.
-    t :> startTime;
+
+    //Start the clock
+    fromDistributor :> int start; //Starts the timer.
+    t :> ticker;
+    printf("Ticker initialized at %d\n", ticker);
+    //fromDistributor <: (ticker / 100000);
+    startTime = (ticker / 100000);
+    printf("start time initialized at %d\n", startTime);
+
+
     while (1){
         select {
-            case fromDistributor :> int request:
-                if (request == 1) { //Reading from longTimer.
-                    fromDistributor <: (cumulativeTime + ((t * 1000) / XS1_TIMER_MHZ)) - startTime;
-                }
-                else {//Pause longTimer and give reading.
-                    fromDistributor <: (cumulativeTime + ((t * 1000) / XS1_TIMER_MHZ)) - startTime;
-                    cumulativeTime += (t * 1000) / XS1_TIMER_MHZ;
-                    fromDistributor :> int resume;
-                    t = 0;
+            case fromDistributor :> int request: //Pinged from Distributer
+                switch(request) {
+                case 1: //start of pause
+                    t :> ticker;
+                    startCumulativeTime = ((ticker / 100000) + loopCount * (maxTicksMS)) - pausedTime - startTime;
+                    printf("cumulative time from long timer is %u\n", startCumulativeTime);
+                    printf("ticker from long timer is %u\n", ticker);
+                    printf("loopCount * (maxTicksMS) from long timer is %u\n", loopCount * (maxTicksMS));
+                    printf("pausedTime from long timer is %u\n", pausedTime);
+                    fromDistributor <: startCumulativeTime;
+                    break;
+                case 2: //end of pause
+                    t :> ticker;
+                    endCumulativeTime = ((ticker / 100000) + loopCount * (maxTicksMS)) - pausedTime - startTime;
+                    pausedTime += (endCumulativeTime - startCumulativeTime);
+                    break;
+                default:
+                    printf("You passed an invalid request to the longTimer.\n");
+                    break;
                 }
                 break;
             default :
-                if (t > (40 * 1000) / XS1_TIMER_MHZ) {
-                    t -= (40 * 1000) / XS1_TIMER_MHZ;
-                    cumulativeTime += (40 * 1000) / XS1_TIMER_MHZ;
+                t :> ticker;
+                if (ticker < oldTicker){
+                    loopCount ++;
                 }
+                oldTicker = ticker;
                 break;
         }
     }
@@ -276,6 +295,11 @@ void distributor(chanend c_in, chanend c_out, chanend fromAcc, chanend fromButto
   int round = 0;
   int orientation = 0;
   int numberLiveCells = 0;
+//  unsigned int timeElapsed = 0;
+//  unsigned long long startTime;
+//  unsigned long long currentTime;
+  //unsigned int startTime;
+  unsigned int currentTime;
 
   //Starting up and wait for SW1 press
   printf( "ProcessImage: Start, size = %dx%d\n", IMHT, IMWD );
@@ -311,71 +335,77 @@ void distributor(chanend c_in, chanend c_out, chanend fromAcc, chanend fromButto
   toLED <: patternLED;
   printf("Image read out succesfully.\n");
 
-  //fromTimer :>
+  fromTimer <: 0; //starts the timer.
+  //fromTimer :> startTime;
+  //printf("start time = %d\n", startTime);
 
-  printf("Processing.\n" ); //Calculates next iteration of the map.
+  printf("Processing.\n" );
 
-      int running = 1;
-      while(running){
-
-          //Pauses if tilted.
-          fromAcc :> orientation;
-          if (orientation == 1){
-              printf("\nProcessing paused.\n");
-              printf("%d rounds processed.\n", round - 1);
-              if ((round % 2) == 0){
-                  numberLiveCells = numLiveCells(imageA);
-              }
-              else {
-                  numberLiveCells = numLiveCells(imageB);
-              }
-              printf("There are currently %d live cells.\n\n", numberLiveCells);
-
-              patternLED = 8;
-              toLED <: patternLED;
-              while(orientation){
-                  fromAcc :> orientation;
-              }
-          }
-
+  int running = 1;
+  while(running){
+      //Pauses calculations when the board is tilted.
+      fromAcc :> orientation;
+      if (orientation == 1){
+          fromTimer <: 1; //pauses the timer.
+          fromTimer :> currentTime; //receive ticker time
+          printf("\nProcessing paused.\n");
+          //!!!!!!!!!!!update this so units are correct!!!!!!!!!!!!!!!
+          printf("%ums elapsed since processing started.\n", currentTime);
+          printf("%u rounds processed.\n", round - 1);
           if ((round % 2) == 0){
-              patternLED = 0;
-              toLED <: patternLED;
-              calculateMap(imageA, imageB);
+              numberLiveCells = numLiveCells(imageA);
           }
           else {
-              patternLED = 1;
-              toLED <: patternLED;
-              calculateMap(imageB, imageA);
+              numberLiveCells = numLiveCells(imageB);
           }
-          printf( "\nProcessing round: %d completed...\n", round);
+          printf("There are currently %d live cells.\n\n", numberLiveCells);
 
-          //wait for 'SW2' from buttonListener
-          select {
-              case fromButtons :> value:
-                  if (value == 13) {
-
-                      //update LEDs
-                      patternLED = 2;
-                      toLED <: patternLED;
-                      printf("Reading out map.\n");
-
-                      if ((round % 2) == 0){
-                          readOutMap(imageA, c_out);
-                      }
-                      else {
-                          readOutMap(imageB, c_out);
-                      }
-                      patternLED = 0;
-                      toLED <: patternLED;
-                  }
-                  running = 0;
-                  break;
-              default:
-                  break;
+          patternLED = 8;
+          toLED <: patternLED;
+          while(orientation){
+              fromAcc :> orientation;
           }
-          round++;
+          fromTimer <: 2; //resumes timer.
       }
+      //Calculates map and blinks LED on alternate rounds
+      if ((round % 2) == 0){
+          patternLED = 0;
+          toLED <: patternLED;
+          calculateMap(imageA, imageB);
+      }
+      else {
+          patternLED = 1;
+          toLED <: patternLED;
+          calculateMap(imageB, imageA);
+      }
+
+      printf( "\nProcessing round: %d completed...\n", round);
+      //wait for 'SW2' from buttonListener
+      select {
+          case fromButtons :> value:
+              if (value == 13) {
+
+                  //update LEDs
+                  patternLED = 2;
+                  toLED <: patternLED;
+                  printf("Reading out map.\n");
+
+                  if ((round % 2) == 0){
+                      readOutMap(imageA, c_out);
+                  }
+                  else {
+                      readOutMap(imageB, c_out);
+                  }
+                  patternLED = 0;
+                  toLED <: patternLED;
+              }
+              running = 0;
+              break;
+          default:
+              break;
+      }
+      round++;
+    }//End of while loop.
 }
 
 /////////////////////////////////////////////////////////////////////////////////////////
@@ -508,7 +538,7 @@ int main(void) {
 
 i2c_master_if i2c[1];               //interface to orientation
 
-char infname[] = "game_of_life/128x128.pgm";     //put your input image path here
+char infname[] = "game_of_life/64x64.pgm";     //put your input image path here
 char outfname[] = "game_of_life/testout.pgm"; //put your output image path here
 chan c_inIO, c_outIO, c_control, c_buttons, c_LEDs, c_timer;    //extend your channel definitions here
 
@@ -529,5 +559,5 @@ par {
 //
 //    testCalculateCell();
 //
-//  return 0;
+return 0;
 }
