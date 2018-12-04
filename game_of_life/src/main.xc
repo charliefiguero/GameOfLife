@@ -9,8 +9,8 @@
 #include "pgmIO.h"
 #include "i2c.h"
 
-#define  IMHT 64                   //image height
-#define  IMWD 64                   //image width
+#define  IMHT 512                   //image height
+#define  IMWD 512                   //image width
 #define  maxTicks 4294967295       //size of int
 #define  maxTicksMS 42950          //size of int to ms precision
 
@@ -127,18 +127,14 @@ void longTimer(chanend fromDistributor){ //
     unsigned int ticker = 0;
     unsigned int oldTicker = 0;
     unsigned int loopCount = 0;
-    //unsigned long long pausedTime, startCumulativeTime, endCumulativeTime = 0;
-    unsigned int pausedTime, startCumulativeTime, endCumulativeTime = 0;
-
+    unsigned int pausedTime = 0;
+    unsigned int startCumulativeTime = 0;
+    unsigned int endCumulativeTime = 0;
 
     //Start the clock
     fromDistributor :> int start; //Starts the timer.
     t :> ticker;
-    printf("Ticker initialized at %d\n", ticker);
-    //fromDistributor <: (ticker / 100000);
     startTime = (ticker / 100000);
-    printf("start time initialized at %d\n", startTime);
-
 
     while (1){
         select {
@@ -147,10 +143,6 @@ void longTimer(chanend fromDistributor){ //
                 case 1: //start of pause
                     t :> ticker;
                     startCumulativeTime = ((ticker / 100000) + loopCount * (maxTicksMS)) - pausedTime - startTime;
-                    printf("cumulative time from long timer is %u\n", startCumulativeTime);
-                    printf("ticker from long timer is %u\n", ticker);
-                    printf("loopCount * (maxTicksMS) from long timer is %u\n", loopCount * (maxTicksMS));
-                    printf("pausedTime from long timer is %u\n", pausedTime);
                     fromDistributor <: startCumulativeTime;
                     break;
                 case 2: //end of pause
@@ -193,6 +185,23 @@ uchar extractCoordinate(uchar map[IMHT][IMWD/8], int x, int y) {
 
     uchar cell = extractBit(map[y][xRegister], xPos);
     return cell;
+}
+
+void readInMap(chanend c_in, uchar image[IMHT][IMWD/8]){
+    uchar val;
+    //Reads in pgm, cell by cell.
+    for(int y = 0; y < IMHT; y++ ) {
+        for (int x = 0; x < (IMWD / 8); x++){
+            uchar target = 0;
+            for (int position = 1; position < 9; position++){ //bitpacks the map as it is read in.
+                c_in :> val;
+                if (val == 255){
+                    target |= (0x01 << (8 - position));
+                }
+            }
+            image[y][x] = target;
+        }
+    }
 }
 
 void readOutMap(uchar map[IMHT][IMWD/8], chanend c_out) { //Sends map to dataOutStream.
@@ -249,17 +258,17 @@ uchar calculateCell(uchar map[IMHT][IMWD/8], int x, int y) { //'x' and 'y' refer
     return calculatedCell;
 }
 
-void calculateMap(uchar mapA[IMHT][IMWD/8], uchar mapB[IMHT][IMWD/8]){
+void calculateMap(uchar mapIn[IMHT][IMWD/8], uchar mapOut[IMHT][IMWD/8]){
         uchar calculatedRegister;
         for(int y = 0; y < IMHT; y++ ) {
             for (int x = 0; x < IMWD/8; x++ ){  // for loop for 8 cells
                 calculatedRegister = 0;
                 for (int bit = 1; bit < 9; bit ++){
-                    if (calculateCell(mapA, (x*8+bit-1), y) == 255){
+                    if (calculateCell(mapIn, (x*8+bit-1), y) == 255){
                         calculatedRegister |= (0x01 << (8 - bit));
                     }
                 }
-                mapB[y][x] = calculatedRegister;
+                mapOut[y][x] = calculatedRegister;
             }
         }
 }
@@ -289,16 +298,11 @@ int numLiveCells(uchar map[IMHT][IMWD/8]){
 void distributor(chanend c_in, chanend c_out, chanend fromAcc, chanend fromButtons,
         chanend toLED, chanend fromTimer)
 {
-  uchar val;
   uchar imageA[IMHT][IMWD/8]; //imageA is originally read from and imageB written to...
   uchar imageB[IMHT][IMWD/8]; //...they swap each iteration.
   int round = 0;
   int orientation = 0;
   int numberLiveCells = 0;
-//  unsigned int timeElapsed = 0;
-//  unsigned long long startTime;
-//  unsigned long long currentTime;
-  //unsigned int startTime;
   unsigned int currentTime;
 
   //Starting up and wait for SW1 press
@@ -306,7 +310,7 @@ void distributor(chanend c_in, chanend c_out, chanend fromAcc, chanend fromButto
   printf( "Waiting for 'SW1' button press...\n" );
 
   int patternLED = 0;
-  int value = 15;
+  int value = 15; //15 is 'no button pressed'
   while(value != 14) {   //Wait for 'SW1' from buttonListener to start processing
       fromButtons :> value;
   }
@@ -314,30 +318,16 @@ void distributor(chanend c_in, chanend c_out, chanend fromAcc, chanend fromButto
 
   printf( "Reading in map.\n" );
   patternLED = 4;
-  toLED <: patternLED;
+  toLED <: patternLED; //Turns on green LED
 
-  //Reads in pgm, cell by cell.
-  for(int y = 0; y < IMHT; y++ ) {
-      for (int x = 0; x < (IMWD / 8); x++){
-          uchar target = 0;
-          for (int position = 1; position < 9; position++){ //bitpacks the map as it is read in.
-              c_in :> val;
-              if (val == 255){
-                  target |= (0x01 << (8 - position));
-              }
-          }
-
-          imageA[y][x] = target;
-      }
-  }
+  //Reads in map in bitmap format.
+  readInMap(c_in, imageA);
 
   patternLED = 0;
-  toLED <: patternLED;
+  toLED <: patternLED; //Turns off green LED
   printf("Image read out succesfully.\n");
 
   fromTimer <: 0; //starts the timer.
-  //fromTimer :> startTime;
-  //printf("start time = %d\n", startTime);
 
   printf("Processing.\n" );
 
@@ -348,10 +338,15 @@ void distributor(chanend c_in, chanend c_out, chanend fromAcc, chanend fromButto
       if (orientation == 1){
           fromTimer <: 1; //pauses the timer.
           fromTimer :> currentTime; //receive ticker time
+
+          patternLED = 8; //Turns LED red.
+          toLED <: patternLED;
+
+          //Reads off stats
           printf("\nProcessing paused.\n");
-          //!!!!!!!!!!!update this so units are correct!!!!!!!!!!!!!!!
           printf("%ums elapsed since processing started.\n", currentTime);
-          printf("%u rounds processed.\n", round - 1);
+          printf("%ums per processing round.\n", currentTime / round );
+          printf("%u rounds processed.\n", round);
           if ((round % 2) == 0){
               numberLiveCells = numLiveCells(imageA);
           }
@@ -360,9 +355,7 @@ void distributor(chanend c_in, chanend c_out, chanend fromAcc, chanend fromButto
           }
           printf("There are currently %d live cells.\n\n", numberLiveCells);
 
-          patternLED = 8;
-          toLED <: patternLED;
-          while(orientation){
+          while(orientation){ //Loops to wait for resume signal
               fromAcc :> orientation;
           }
           fromTimer <: 2; //resumes timer.
@@ -378,8 +371,8 @@ void distributor(chanend c_in, chanend c_out, chanend fromAcc, chanend fromButto
           toLED <: patternLED;
           calculateMap(imageB, imageA);
       }
-
       printf( "\nProcessing round: %d completed...\n", round);
+
       //wait for 'SW2' from buttonListener
       select {
           case fromButtons :> value:
@@ -491,42 +484,47 @@ void orientation( client interface i2c_master_if i2c, chanend toDist) {
 //
 /////////////////////////////////////////////////////////////////////////////////////////
 
-//void testCalculateCell() {
-//    uchar grid0[8] = {0, 0, 0, 0, 0, 0, 0, 0};
-//    uchar grid1[8] = {0, 0, 0, 0, 0, 0, 0, 255};
-//    uchar grid2[8] = {0, 0, 0, 0, 0, 0, 255, 255};
-//    uchar grid3[8] = {0, 0, 0, 0, 0, 255, 255, 255};
-//    uchar grid4[8] = {0, 0, 0, 0, 255, 255, 255, 255};
-//    uchar grid5[8] = {0, 0, 0, 255, 255, 255, 255, 255};
-//    uchar grid6[8] = {0, 0, 255, 255, 255, 255, 255, 255};
-//    uchar grid7[8] = {0, 255, 255, 255, 255, 255, 255, 255};
-//    uchar grid8[8] = {255, 255, 255, 255, 255, 255, 255, 255};
+//void calculateMap(uchar mapIn[IMHT][IMWD/8], uchar mapOut[IMHT][IMWD/8]){
+
+//8x8 test map;
+//uchar testArray[8][1] = {{0x02}, {0x01}, {0x38}, {0x31}, {0xa9}, {0x00}, {0x00}, {0x80}};
+//uchar firstIteration[8][1] = {{0x01}, {0x10}, {0x28}, {0x81}, {0xE1}, {0x00}, {0x00}, {0x00}};
+//uchar secondIteration[8][1] = {{0x00}, {0x10}, {0x10}, {0x31}, {0x41}, {0xc0}, {0x00}, {0x00}};
 //
+////Output arrays.
+//uchar firstIterationOutput[8][1];
+//uchar secondIterationOutput[8][1];
 //
-//    uchar alive = calculateCell(grid7, 1);
-//    if (alive == 0) printf("testCalculateCell() passed.\n");
-//    else {
-//        printf("testCalculateCell() failed.\n");
+//void testCalculateMap(uchar testArray[8][1], uchar firstIteration[8][1],
+//                      uchar secondIteration[8][1],
+//                      uchar firstIterationOutput[8][1],
+//                      uchar secondIterationOutput[8][1]) {
+//
+//    calculateMap(testArray, firstIterationOutput);
+//    printf("firstIterationOutput:\n");
+//    for (int y = 0; y < 8; y++) {
+//        printf("%x, ", firstIterationOutput[y][0]);
+//    }
+//    printf("\n");
+//
+//    for (int y = 0; y < 8; y++) {
+//        assert(firstIterationOutput[y][0] == firstIteration[y][0]);
 //    }
 //
-//}
-
-//uchar calculateCell(uchar *map, int x, int y) { //'x' and 'y' refer to middle cell.
-
-//void DataInStream(char infname[], chanend c_out)
-//uchar* aliveSurroundingCells(uchar *map, int x, int y)
-//uchar* readInMap(chanend c_in){
-//void testSurroundingCells(){
-//
-//    uchar map[IMHT][IMWD] = malloc(IMHT*IMWD);
-//    par{
-//        DataInStream("game_of_life/test.pgm", c_inIO);
-//        map = readInMap(c_inIO);
+//    calculateMap(firstIteration, secondIterationOutput);
+//    printf("secondIterationOutput:\n");
+//    for (int y = 0; y < 8; y++) {
+//        printf("%x, ", secondIterationOutput[y][0]);
 //    }
-//        uchar grid[] = malloc(8);
-//        grid = surroundingCells(map, 1, 1);
+//    printf("\n");
 //
+//    for (int y = 0; y < 8; y++) {
+//        assert(secondIterationOutput[y][0] == secondIteration[y][0]);
+//    }
+//
+//    printf("Test: calculateMap passed.\n");
 //}
+
 
 /////////////////////////////////////////////////////////////////////////////////////////
 //
@@ -538,7 +536,7 @@ int main(void) {
 
 i2c_master_if i2c[1];               //interface to orientation
 
-char infname[] = "game_of_life/64x64.pgm";     //put your input image path here
+char infname[] = "game_of_life/512x512.pgm";     //put your input image path here
 char outfname[] = "game_of_life/testout.pgm"; //put your output image path here
 chan c_inIO, c_outIO, c_control, c_buttons, c_LEDs, c_timer;    //extend your channel definitions here
 
@@ -551,13 +549,8 @@ par {
     buttonListener(buttons, c_buttons); //thread to listen for button presses
     showLEDs(leds, c_LEDs);
     longTimer(c_timer);
+    //testCalculateMap(testArray, firstIteration, secondIteration, firstIterationOutput, secondIterationOutput);
   }
 
-
-//    //Tests
-//    chan c_inIO;
-//
-//    testCalculateCell();
-//
 return 0;
 }
