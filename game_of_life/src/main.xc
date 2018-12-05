@@ -8,16 +8,16 @@
 #include "pgmIO.h"
 #include "i2c.h"
 
-#define  IMHT 512                   //image height
-#define  IMWD 512                   //image width
-#define  numberOfWorkers 1
+#define  IMHT 64                   //image height
+#define  IMWD 64                   //image width
+#define  numberOfWorkers 4
 #define  numberOfRowsInSlice (IMHT / numberOfWorkers)
 #define  maxTicks 4294967295       //size of int
 #define  maxTicksMS 42950          //size of int to ms precision
 
 typedef unsigned char uchar;      //using uchar as shorthand
 
-char infname[] = "game_of_life/512x512.pgm";     //put your input image path here
+char infname[] = "game_of_life/64x64.pgm";     //put your input image path here
 char outfname[] = "game_of_life/testout.pgm"; //put your output image path here
 
 //definitions for bit-packing
@@ -31,15 +31,14 @@ char outfname[] = "game_of_life/testout.pgm"; //put your output image path here
 #define BIT1 0x80
 const uchar bits[8] = {BIT1, BIT2, BIT3, BIT4, BIT5, BIT6, BIT7, BIT8};
 
-on tile[0] : in port buttons = XS1_PORT_4E; //port to access xCore-200 buttons
-on tile[0] : out port leds = XS1_PORT_4F;   //port to access xCore-200 LEDs
-
 struct coordinates {
     int x;
     int y;
 };
 typedef struct coordinates coordinates;
 
+on tile[0] : in port buttons = XS1_PORT_4E; //port to access xCore-200 buttons
+on tile[0] : out port leds = XS1_PORT_4F;   //port to access xCore-200 LEDs
 on tile[0] : port p_scl = XS1_PORT_1E;         //interface ports to orientation
 on tile[0] : port p_sda = XS1_PORT_1F;
 
@@ -262,6 +261,7 @@ uchar calculateCell(uchar map[rows][IMWD/8], int x, int y, unsigned int rows) { 
     return calculatedCell;
 }
 
+//-------This version was for before worker threads were implemented-----------
 //void calculateMap(uchar mapIn[IMHT][IMWD/8], uchar mapOut[IMHT][IMWD/8]){
 //        uchar calculatedRegister;
 //        for(int y = 0; y < IMHT; y++ ) {
@@ -460,10 +460,13 @@ void distributor(chanend c_in, chanend c_out, chanend fromAcc, chanend fromButto
           fromTimer <: 2; //resumes timer.
       }
 
-      //numberLiveCells = numLiveCells(image, IMHT);
+      //prints out image at specific round
+//      if (round == 2){
+//          readOutMap(image, c_out);
+//      }
+      numberLiveCells = numLiveCells(image, IMHT);
       //printf("There are currently %d live cells.\n\n", numberLiveCells);
 
-      //void calculateMap(chanend c_worker, uchar image[IMHT][IMWD/8]){
       //Calculates map and blinks LED on alternate rounds
       if ((round % 2) == 0){
           patternLED = 0;
