@@ -5,18 +5,20 @@
 #include <xs1.h>
 #include <stdio.h>
 #include <assert.h>
-//#include "xcore_c.h"
 #include "pgmIO.h"
 #include "i2c.h"
 
-#define  IMHT 64                   //image height
-#define  IMWD 64                   //image width
+#define  IMHT 512                   //image height
+#define  IMWD 512                   //image width
 #define  numberOfWorkers 1
 #define  numberOfRowsInSlice (IMHT / numberOfWorkers)
 #define  maxTicks 4294967295       //size of int
 #define  maxTicksMS 42950          //size of int to ms precision
 
 typedef unsigned char uchar;      //using uchar as shorthand
+
+char infname[] = "game_of_life/512x512.pgm";     //put your input image path here
+char outfname[] = "game_of_life/testout.pgm"; //put your output image path here
 
 //definitions for bit-packing
 #define BIT8 0x01
@@ -38,8 +40,8 @@ struct coordinates {
 };
 typedef struct coordinates coordinates;
 
-port p_scl = XS1_PORT_1E;         //interface ports to orientation
-port p_sda = XS1_PORT_1F;
+on tile[0] : port p_scl = XS1_PORT_1E;         //interface ports to orientation
+on tile[0] : port p_sda = XS1_PORT_1F;
 
 #define FXOS8700EQ_I2C_ADDR 0x1E  //register addresses for orientation
 #define FXOS8700EQ_XYZ_DATA_CFG_REG 0x0E
@@ -298,6 +300,7 @@ int numLiveCells(uchar map[rows][IMWD/8], unsigned int rows){
 //Sends bitpacked map
 //numRows doesn't include ghost rows
 //startRow is the first relevant row for the slice(not ghost row)
+//sendImageSlice(toWorker[i], image, numberOfRowsInSlice, i);
 void sendImageSlice(chanend toWorker, uchar image[IMHT][IMWD/8], int numRows, int startRow){
 
     int topGhostRow = (startRow - 1 + IMHT) % IMHT;
@@ -322,10 +325,10 @@ void sendImageSlice(chanend toWorker, uchar image[IMHT][IMWD/8], int numRows, in
 }
 
 //Receives calculated bytes from workers and puts them into the correct spot in map.
-void recompileMap(chanend toWorker[numberOfWorkers], uchar image[IMHT][IMWD/8], int workerNumber){
+void recompileMap(chanend toWorker, uchar image[IMHT][IMWD/8], int workerNumber){
     for (int y = (workerNumber*(IMHT/numberOfWorkers)); y < (IMHT*(workerNumber+1))/numberOfWorkers; y ++){
         for (int x = 0; x < IMWD / 8; x ++){
-            toWorker[workerNumber] :> image[y][x];
+            toWorker :> image[y][x];
             //printf("calculateMap recompile for %d\n", y);
         }
     }
@@ -337,13 +340,13 @@ void calculateMap(chanend toWorker[], uchar image[IMHT][IMWD/8]){
     //Sends all slices
     //printf("Sending image slice...\n");
     for (int i = 0; i < numberOfWorkers; i ++){
-        sendImageSlice(toWorker[i], image, numberOfRowsInSlice, i);
+        sendImageSlice(toWorker[i], image, numberOfRowsInSlice, i * numberOfRowsInSlice);
     }
     //printf("sendImageSlice complete.\n");
 
     //Receives all slices and recompiles into image
     for (int i = 0; i < numberOfWorkers; i++){
-        recompileMap(toWorker, image, 0);
+        recompileMap(toWorker[i], image, i);
     }
     //printf("calculateMap complete.\n");
 }
@@ -427,9 +430,9 @@ void distributor(chanend c_in, chanend c_out, chanend fromAcc, chanend fromButto
   toLED <: patternLED; //Turns off green LED
   printf("Image read out succesfully.\n");
 
-  fromTimer <: 0; //starts the timer.
-
   printf("Processing.\n" );
+
+  fromTimer <: 0; //starts the timer.
 
   int running = 1;
   while(running){
@@ -457,8 +460,8 @@ void distributor(chanend c_in, chanend c_out, chanend fromAcc, chanend fromButto
           fromTimer <: 2; //resumes timer.
       }
 
-      numberLiveCells = numLiveCells(image, IMHT);
-      printf("There are currently %d live cells.\n\n", numberLiveCells);
+      //numberLiveCells = numLiveCells(image, IMHT);
+      //printf("There are currently %d live cells.\n\n", numberLiveCells);
 
       //void calculateMap(chanend c_worker, uchar image[IMHT][IMWD/8]){
       //Calculates map and blinks LED on alternate rounds
@@ -478,7 +481,7 @@ void distributor(chanend c_in, chanend c_out, chanend fromAcc, chanend fromButto
           calculateMap(toWorker, image);
           //printf("Completed calculateMap a.\n");
       }
-      printf( "\nProcessing round: %d completed...\n", round);
+      //printf( "Processing round: %d completed...\n", round);
 
       //wait for 'SW2' from buttonListener
       select {
@@ -644,23 +647,21 @@ int main(void) {
 
 i2c_master_if i2c[1];               //interface to orientation
 
-char infname[] = "game_of_life/64x64.pgm";     //put your input image path here
-char outfname[] = "game_of_life/testout.pgm"; //put your output image path here
 chan c_inIO, c_outIO, c_control, c_buttons, c_LEDs, c_timer;    //extend your channel definitions here
 chan c_worker[numberOfWorkers];
 
 par {
-    i2c_master(i2c, 1, p_scl, p_sda, 10);   //server thread providing orientation data
-    orientation(i2c[0],c_control);        //client thread reading orientation data
-    DataInStream(infname, c_inIO);          //thread to read in a PGM image
-    DataOutStream(outfname, c_outIO);       //thread to write out a PGM image
-    buttonListener(buttons, c_buttons); //thread to listen for button presses
-    showLEDs(leds, c_LEDs);
-    longTimer(c_timer);
+    on tile[0] : i2c_master(i2c, 1, p_scl, p_sda, 10);   //server thread providing orientation data
+    on tile[0] : orientation(i2c[0],c_control);        //client thread reading orientation data
+    on tile[0] : DataInStream(infname, c_inIO);          //thread to read in a PGM image
+    on tile[0] : DataOutStream(outfname, c_outIO);       //thread to write out a PGM image
+    on tile[0] : buttonListener(buttons, c_buttons); //thread to listen for button presses
+    on tile[0] : showLEDs(leds, c_LEDs);
 
-    distributor(c_inIO, c_outIO, c_control, c_buttons, c_LEDs, c_timer, c_worker);//thread to coordinate work on image
+    on tile[1] : longTimer(c_timer);
+    on tile[1] : distributor(c_inIO, c_outIO, c_control, c_buttons, c_LEDs, c_timer, c_worker);//thread to coordinate work on image
     par (int i = 0; i < numberOfWorkers; i++){
-        worker(c_worker[i], numberOfRowsInSlice);
+        on tile[1] : worker(c_worker[i], numberOfRowsInSlice);
     }
 
     //testCalculateMap(testArray, firstIteration, secondIteration, firstIterationOutput, secondIterationOutput);
