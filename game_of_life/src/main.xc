@@ -10,7 +10,7 @@
 
 #define  IMHT 512                                      //image height
 #define  IMWD 512                                      //image width
-#define  numberOfWorkers 8
+#define  numberOfWorkers 4
 #define  numberOfRowsInSlice (IMHT / numberOfWorkers)
 #define  maxTicks 4294967295                            //size of unsigned int
 #define  maxTicksMS 42950                               //size of unsigned int to ms precision
@@ -55,51 +55,51 @@ on tile[0] : port p_sda = XS1_PORT_1F;
 //
 /////////////////////////////////////////////////////////////////////////////////////////
 
-//DataInStream for .pgm files
-void DataInStream(char infname[], chanend c_out)
-{
-  int res;
-  uchar line[ IMWD ];
-  printf( "DataInStream: Start...\n" );
-
-  //Open PGM file
-  res = _openinpgm( infname, IMWD, IMHT );
-  if( res ) {
-    printf( "DataInStream: Error openening %s\n.", infname );
-    return;
-  }
-
-  //Read image line-by-line and send byte by byte to channel c_out
-  for( int y = 0; y < IMHT; y++ ) {
-    _readinline( line, IMWD );
-    for( int x = 0; x < IMWD; x++ ) {
-      c_out <: line[ x ];
-      //printf( "-%4.1d ", line[ x ] ); //show image values
-    }
-    //printf( "\n" );
-  }
-
-  //Close PGM image file
-  _closeinpgm();
-  printf( "DataInStream: Done...\n" );
-  return;
-}
-
-//DataInStream for randomly generated images of variable size
+////DataInStream for .pgm files
 //void DataInStream(char infname[], chanend c_out)
 //{
+//  int res;
+//  uchar line[ IMWD ];
 //  printf( "DataInStream: Start...\n" );
 //
-//  uchar random;
-//  for( int y = 0; y < IMHT; y++ ) {
-//      for( int x = 0; x < IMWD/8; x++ ) {
-//          random = rand() % 255 ;
-//          c_out <: random;
-//      }
+//  //Open PGM file
+//  res = _openinpgm( infname, IMWD, IMHT );
+//  if( res ) {
+//    printf( "DataInStream: Error openening %s\n.", infname );
+//    return;
 //  }
+//
+//  //Read image line-by-line and send byte by byte to channel c_out
+//  for( int y = 0; y < IMHT; y++ ) {
+//    _readinline( line, IMWD );
+//    for( int x = 0; x < IMWD; x++ ) {
+//      c_out <: line[ x ];
+//      //printf( "-%4.1d ", line[ x ] ); //show image values
+//    }
+//    //printf( "\n" );
+//  }
+//
+//  //Close PGM image file
+//  _closeinpgm();
 //  printf( "DataInStream: Done...\n" );
 //  return;
 //}
+
+//DataInStream for randomly generated images of variable size
+void DataInStream(char infname[], chanend c_out)
+{
+  printf( "DataInStream: Start...\n" );
+
+  uchar random;
+  for( int y = 0; y < IMHT; y++ ) {
+      for( int x = 0; x < IMWD/8; x++ ) {
+          random = rand() % 255 ;
+          c_out <: random;
+      }
+  }
+  printf( "DataInStream: Done...\n" );
+  return;
+}
 
 
 
@@ -202,33 +202,33 @@ uchar extractCoordinate(uchar map[rows][IMWD/8], int x, int y, unsigned int rows
     return cell;
 }
 
-//readInMap for .pgm files
-void readInMap(chanend c_in, uchar image[IMHT][IMWD/8]){
-    uchar val;
-    //Reads in pgm, cell by cell.
-    for(int y = 0; y < IMHT; y++ ) {
-        for (int x = 0; x < (IMWD / 8); x++){
-            uchar target = 0;
-            for (int position = 1; position < 9; position++){ //bitpacks the map as it is read in.
-                c_in :> val;
-                if (val == 255){
-                    target |= (0x01 << (8 - position));
-                }
-            }
-            image[y][x] = target;
-        }
-    }
-}
-
-////readInMap for randomly generated images of variable size
+////readInMap for .pgm files
 //void readInMap(chanend c_in, uchar image[IMHT][IMWD/8]){
+//    uchar val;
 //    //Reads in pgm, cell by cell.
 //    for(int y = 0; y < IMHT; y++ ) {
 //        for (int x = 0; x < (IMWD / 8); x++){
-//            c_in :> image[y][x];
+//            uchar target = 0;
+//            for (int position = 1; position < 9; position++){ //bitpacks the map as it is read in.
+//                c_in :> val;
+//                if (val == 255){
+//                    target |= (0x01 << (8 - position));
+//                }
+//            }
+//            image[y][x] = target;
 //        }
 //    }
 //}
+
+//readInMap for randomly generated images of variable size
+void readInMap(chanend c_in, uchar image[IMHT][IMWD/8]){
+    //Reads in pgm, cell by cell.
+    for(int y = 0; y < IMHT; y++ ) {
+        for (int x = 0; x < (IMWD / 8); x++){
+            c_in :> image[y][x];
+        }
+    }
+}
 
 //Exports current game state to testout.pgm
 void readOutMap(uchar map[IMHT][IMWD/8], chanend c_out) { //Sends map to dataOutStream.
@@ -373,6 +373,10 @@ void calculateMap(chanend toWorker[], uchar image[IMHT][IMWD/8]){
 
 //A thread that progresses an image slice
 void worker(chanend fromDistributor, int rowsInSlice){
+    timer t;
+    int startTimer;
+    int endTimer;
+
 
     uchar imageSlice[numberOfRowsInSlice+3][IMWD/8];
 
@@ -381,7 +385,10 @@ void worker(chanend fromDistributor, int rowsInSlice){
         //Read in bitpacked slice
         for (int y = 1; y < (rowsInSlice + 3); y++){
             for (int x = 0; x < IMWD/8; x ++){
+                t :> startTimer;
                 fromDistributor :> imageSlice[y][x];
+                t :> endTimer;
+                printf("%u\n", endTimer - startTimer);
             }
         }
 
