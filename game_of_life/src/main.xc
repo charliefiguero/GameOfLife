@@ -8,17 +8,17 @@
 #include "pgmIO.h"
 #include "i2c.h"
 
-#define  IMHT 64                   //image height
-#define  IMWD 64                   //image width
-#define  numberOfWorkers 4
+#define  IMHT 512                                      //image height
+#define  IMWD 512                                      //image width
+#define  numberOfWorkers 8
 #define  numberOfRowsInSlice (IMHT / numberOfWorkers)
-#define  maxTicks 4294967295       //size of int
-#define  maxTicksMS 42950          //size of int to ms precision
+#define  maxTicks 4294967295                            //size of unsigned int
+#define  maxTicksMS 42950                               //size of unsigned int to ms precision
 
-typedef unsigned char uchar;      //using uchar as shorthand
+typedef unsigned char uchar;                            //using uchar as shorthand
 
-char infname[] = "game_of_life/64x64.pgm";     //put your input image path here
-char outfname[] = "game_of_life/testout.pgm"; //put your output image path here
+char infname[] = "game_of_life/512x512.pgm";            //put your input image path here
+char outfname[] = "game_of_life/testout.pgm";           //put your output image path here
 
 //definitions for bit-packing
 #define BIT8 0x01
@@ -33,12 +33,12 @@ char outfname[] = "game_of_life/testout.pgm"; //put your output image path here
 const uchar bits[8] = {BIT1, BIT2, BIT3, BIT4, BIT5, BIT6, BIT7, BIT8};
 const uchar mask[] = {0x80, 0x40, 0x20, 0x10, 0x08, 0x04, 0x02, 0x01};
 
-on tile[0] : in port buttons = XS1_PORT_4E; //port to access xCore-200 buttons
-on tile[0] : out port leds = XS1_PORT_4F;   //port to access xCore-200 LEDs
-on tile[0] : port p_scl = XS1_PORT_1E;         //interface ports to orientation
+on tile[0] : in port buttons = XS1_PORT_4E;     //port to access xCore-200 buttons
+on tile[0] : out port leds = XS1_PORT_4F;       //port to access xCore-200 LEDs
+on tile[0] : port p_scl = XS1_PORT_1E;          //interface ports to orientation
 on tile[0] : port p_sda = XS1_PORT_1F;
 
-#define FXOS8700EQ_I2C_ADDR 0x1E  //register addresses for orientation
+#define FXOS8700EQ_I2C_ADDR 0x1E                //register addresses for orientation
 #define FXOS8700EQ_XYZ_DATA_CFG_REG 0x0E
 #define FXOS8700EQ_CTRL_REG_1 0x2A
 #define FXOS8700EQ_DR_STATUS 0x0
@@ -54,6 +54,8 @@ on tile[0] : port p_sda = XS1_PORT_1F;
 // Read Image from PGM file from path infname[] to channel c_out
 //
 /////////////////////////////////////////////////////////////////////////////////////////
+
+//DataInStream for .pgm files
 void DataInStream(char infname[], chanend c_out)
 {
   int res;
@@ -82,11 +84,27 @@ void DataInStream(char infname[], chanend c_out)
   printf( "DataInStream: Done...\n" );
   return;
 }
-/////////////////////////////////////////////////////////////////////////////////////////
+
+//DataInStream for randomly generated images of variable size
+//void DataInStream(char infname[], chanend c_out)
+//{
+//  printf( "DataInStream: Start...\n" );
 //
-// Our functions.
-//
-/////////////////////////////////////////////////////////////////////////////////////////
+//  uchar random;
+//  for( int y = 0; y < IMHT; y++ ) {
+//      for( int x = 0; x < IMWD/8; x++ ) {
+//          random = rand() % 255 ;
+//          c_out <: random;
+//      }
+//  }
+//  printf( "DataInStream: Done...\n" );
+//  return;
+//}
+
+
+
+//////////////////////////////// Our functions///////////////////////////////////////////
+
 
 /////////////////////////////////////////////////////////////////////////////////////////
 //
@@ -118,7 +136,6 @@ int showLEDs(out port p, chanend fromDistributor) {
   return 0;
 }
 
-//(smallTimer * 1000) / XS1_TIMER_MHZ)
 //Dont send 2 request before 1 please.
 void longTimer(chanend fromDistributor){ //
     timer t;
@@ -130,10 +147,9 @@ void longTimer(chanend fromDistributor){ //
     unsigned int startCumulativeTime = 0;
     unsigned int endCumulativeTime = 0;
 
-    //Start the clock
-    fromDistributor :> int start; //Starts the timer.
+    fromDistributor :> int start; //Distributor starts the timer.
     t :> ticker;
-    startTime = (ticker / 100000);
+    startTime = (ticker / 100000); //storing time in ms
 
     while (1){
         select {
@@ -156,7 +172,7 @@ void longTimer(chanend fromDistributor){ //
                 break;
             default :
                 t :> ticker;
-                if (ticker < oldTicker){
+                if (ticker < oldTicker){ //tracks number of times timer t resets to 0
                     loopCount ++;
                 }
                 oldTicker = ticker;
@@ -171,7 +187,8 @@ void longTimer(chanend fromDistributor){ //
 //
 /////////////////////////////////////////////////////////////////////////////////////////
 
-uchar extractBit (uchar reg, int n) {//extracts bit value at 'n' position of register 'reg'.
+//extracts bit value at 'n' position of register 'reg'.
+uchar extractBit (uchar reg, int n) {
     if ((reg & mask[n]) != 0) return 255;
     else return 0;
 }
@@ -185,6 +202,7 @@ uchar extractCoordinate(uchar map[rows][IMWD/8], int x, int y, unsigned int rows
     return cell;
 }
 
+//readInMap for .pgm files
 void readInMap(chanend c_in, uchar image[IMHT][IMWD/8]){
     uchar val;
     //Reads in pgm, cell by cell.
@@ -202,16 +220,27 @@ void readInMap(chanend c_in, uchar image[IMHT][IMWD/8]){
     }
 }
 
-//void readOutMap(uchar map[IMHT][IMWD/8], chanend c_out) { //Sends map to dataOutStream.
+////readInMap for randomly generated images of variable size
+//void readInMap(chanend c_in, uchar image[IMHT][IMWD/8]){
+//    //Reads in pgm, cell by cell.
 //    for(int y = 0; y < IMHT; y++ ) {
-//        for (int x = 0; x < IMWD/8; x++ ){
-//            for (int bit = 0; bit < 8; bit ++){
-//                //c_out <: extractCoordinate(map, ((8*x) + bit), y);
-//                c_out <: extractBit(map[y][x], bit);
-//            }
+//        for (int x = 0; x < (IMWD / 8); x++){
+//            c_in :> image[y][x];
 //        }
 //    }
 //}
+
+//Exports current game state to testout.pgm
+void readOutMap(uchar map[IMHT][IMWD/8], chanend c_out) { //Sends map to dataOutStream.
+    for(int y = 0; y < IMHT; y++ ) {
+        for (int x = 0; x < IMWD/8; x++ ){
+            for (int bit = 0; bit < 8; bit ++){
+                //c_out <: extractCoordinate(map, ((8*x) + bit), y);
+                c_out <: extractBit(map[y][x], bit);
+            }
+        }
+    }
+}
 
 uchar calculateCellHelper(uchar grid[8], int alive) {
     int a = alive;
@@ -243,10 +272,9 @@ uchar calculateCell(uchar map[rows][IMWD/8], int x, int y, unsigned int rows) { 
 
     uchar surroundingCells[8];
     //topleft, topmiddle, topright, left, right, bottomleft, bottommiddle, bottomright.
+    //Finds surrounding cells based on abstract coordinates (as if it was not bitpacked)
 
     surroundingCells[0] = extractCoordinate(map, ((x - 1 + IMWD) % IMWD), (y - 1), rows);
-
-
     surroundingCells[1] = extractCoordinate(map, ((x + IMWD) % IMWD), (y - 1), rows);
     surroundingCells[2] = extractCoordinate(map, ((x + 1 + IMWD) % IMWD), (y - 1), rows);
     surroundingCells[3] = extractCoordinate(map, ((x - 1 + IMWD) % IMWD), (y), rows);
@@ -255,10 +283,7 @@ uchar calculateCell(uchar map[rows][IMWD/8], int x, int y, unsigned int rows) { 
     surroundingCells[6] = extractCoordinate(map, ((x + IMWD) % IMWD), (y + 1), rows);
     surroundingCells[7] = extractCoordinate(map, ((x + 1 + IMWD) % IMWD), (y + 1), rows);
 
-
-
     uchar calculatedCell = calculateCellHelper(surroundingCells, alive);
-
     return calculatedCell;
 }
 
@@ -278,8 +303,8 @@ uchar calculateCell(uchar map[rows][IMWD/8], int x, int y, unsigned int rows) { 
 //        }
 //}
 
+//Calculates current number of live cells
 int numLiveCells(uchar map[rows][IMWD/8], unsigned int rows){
-
     int liveCells = 0;
     uchar alive = 0;
     for (int y = 0; y < IMHT; y++){
@@ -287,7 +312,6 @@ int numLiveCells(uchar map[rows][IMWD/8], unsigned int rows){
             alive = extractCoordinate(map, x, y, rows);
             if (alive == 255) liveCells ++;
         }
-
     }
     return liveCells;
 }
@@ -301,9 +325,7 @@ int numLiveCells(uchar map[rows][IMWD/8], unsigned int rows){
 //Sends bitpacked map
 //numRows doesn't include ghost rows
 //startRow is the first relevant row for the slice(not ghost row)
-//sendImageSlice(toWorker[i], image, numberOfRowsInSlice, i);
 void sendImageSlice(chanend toWorker, uchar image[IMHT][IMWD/8], int numRows, int startRow){
-
     int topGhostRow = (startRow - 1 + IMHT) % IMHT;
     int bottomGhostRow = (startRow + numRows) % IMHT;
 
@@ -331,7 +353,6 @@ void recompileMap(chanend toWorker, uchar image[IMHT][IMWD/8], int workerNumber)
     for (int y = (workerNumber*(IMHT/numberOfWorkers)); y < (IMHT*(workerNumber+1))/numberOfWorkers; y ++){
         for (int x = 0; x < IMWD / 8; x ++){
             toWorker :> image[y][x];
-            //printf("calculateMap recompile for %d\n", y);
         }
     }
 }
@@ -340,69 +361,51 @@ void recompileMap(chanend toWorker, uchar image[IMHT][IMWD/8], int workerNumber)
 void calculateMap(chanend toWorker[], uchar image[IMHT][IMWD/8]){
 
     //Sends all slices
-    //printf("Sending image slice...\n");
-
     for (int i = 0; i < numberOfWorkers; i ++){
         sendImageSlice(toWorker[i], image, numberOfRowsInSlice, i * numberOfRowsInSlice);
     }
 
-    //printf("sendImageSlice complete.\n");
     //Receives all slices and recompiles into image
     for (int i = 0; i < numberOfWorkers; i++){
         recompileMap(toWorker[i], image, i);
     }
-    //printf("calculateMap complete.\n");
 }
 
 //A thread that progresses an image slice
 void worker(chanend fromDistributor, int rowsInSlice){
 
-    uchar imageSlice[numberOfRowsInSlice+2][IMWD/8];
-    uchar imageBuffer[numberOfRowsInSlice+2][IMWD/8];
-
+    uchar imageSlice[numberOfRowsInSlice+3][IMWD/8];
 
     //Worker runs continuously.
     while(1){
-        //printf("Worker ready to read in a slice.\n");
         //Read in bitpacked slice
-
-        for (int y = 0; y < (rowsInSlice + 2); y++){
-
+        for (int y = 1; y < (rowsInSlice + 3); y++){
             for (int x = 0; x < IMWD/8; x ++){
                 fromDistributor :> imageSlice[y][x];
-                //printf("%d\n", y);
             }
         }
-
-        //printf("Worker has read in the image slice.\n");
 
         //Loops over relevant bytes, extracts cells, calculates new cells, bitpacks them and exports to distributor
         uchar calculatedRegister;
-        for (int y = 1; y < rowsInSlice + 1; y ++){
+        for (int y = 2; y < rowsInSlice + 2; y ++){
             for (int x = 0; x < IMWD/8; x ++){
-
                 calculatedRegister = 0;
                 for (int bit = 1; bit < 9; bit ++){
-                    if (calculateCell(imageSlice, (x*8+(bit-1)), y, (rowsInSlice + 2)) == 255){
+                    if (calculateCell(imageSlice, (x*8+(bit-1)), y, (rowsInSlice + 3)) == 255){
                         calculatedRegister |= (0x01 << (8 - bit));
                     }
                 }
-
-                //printf("Worker exporting byte.\n");
-                imageBuffer[y][x] = calculatedRegister;
-                //printf("Worker has exported a byte.\n");
+                imageSlice[y - 2][x] = calculatedRegister;
             }
+
         }
 
-        for (int y = 1; y < rowsInSlice + 1; y ++){
+        //Exports relevant cells to the distributor
+        for (int y = 0; y < rowsInSlice; y ++){
             for (int x = 0; x < IMWD/8; x ++){
-                //printf("Worker exporting byte.\n");
-                fromDistributor <: imageBuffer[y][x];
-                //printf("Worker has exported a byte.\n");
+                fromDistributor <: imageSlice[y][x];
             }
         }
-
-        //printf("Worker has exported image.\n");
     }
 }
 
@@ -417,8 +420,6 @@ void worker(chanend fromDistributor, int rowsInSlice){
 void distributor(chanend c_in, chanend c_out, chanend fromAcc, chanend fromButtons,
         chanend toLED, chanend fromTimer, chanend toWorker[numberOfWorkers])
 {
-//  uchar imageA[IMHT][IMWD/8]; //imageA is originally read from and imageB written to...
-//  uchar imageB[IMHT][IMWD/8]; //...they swap each iteration.
   uchar image[IMHT][IMWD/8];
   int round = 0;
   int orientation = 0;
@@ -430,8 +431,8 @@ void distributor(chanend c_in, chanend c_out, chanend fromAcc, chanend fromButto
   printf( "Waiting for 'SW1' button press...\n" );
 
   int patternLED = 0;
-  int value = 15; //15 is 'no button pressed'
-  while(value != 14) {   //Wait for 'SW1' from buttonListener to start processing
+  int value = 15;            //15 is 'no button pressed'
+  while(value != 14) {       //Wait for 'SW1' from buttonListener to start processing
       fromButtons :> value;
   }
   value = 15;
@@ -455,12 +456,19 @@ void distributor(chanend c_in, chanend c_out, chanend fromAcc, chanend fromButto
   while(running){
       //Pauses calculations when the board is tilted.
       fromAcc :> orientation;
-      //(orientation == 1)
-      if (round == 100){
-          fromTimer <: 1; //pauses the timer.
+
+//      if (round == 1){
+//          printf("readingOutMap\n");
+//          readOutMap(image, c_out);
+//      }
+//      printf("Finished reading out out map.\n");
+
+      //Pause when tilted
+      if (orientation == 1){
+          fromTimer <: 1;           //pauses the timer.
           fromTimer :> currentTime; //receive ticker time
 
-          patternLED = 8; //Turns LED red.
+          patternLED = 8;           //Turns LED red.
           toLED <: patternLED;
 
           //Reads off stats
@@ -472,7 +480,7 @@ void distributor(chanend c_in, chanend c_out, chanend fromAcc, chanend fromButto
           numberLiveCells = numLiveCells(image, IMHT);
           printf("There are currently %d live cells.\n\n", numberLiveCells);
 
-          while(1){ //Loops to wait for resume signal
+          while(orientation){ //Loops to wait for resume signal
               fromAcc :> orientation;
           }
           fromTimer <: 2; //resumes timer.
@@ -492,19 +500,12 @@ void distributor(chanend c_in, chanend c_out, chanend fromAcc, chanend fromButto
       if ((round % 2) == 0){
           patternLED = 0;
           toLED <: patternLED;
-
-          //printf("Made it to calculateMap a.\n");
-          //calculateMap(imageA, imageB);
           calculateMap(toWorker, image);
-          //printf("Completed calculateMap a.\n");
       }
       else {
           patternLED = 1;
           toLED <: patternLED;
-          //printf("Made it to calculateMap a.\n");
-          //calculateMap(imageB, imageA);
           calculateMap(toWorker, image);
-          //printf("Completed calculateMap a.\n");
       }
       //printf( "Processing round: %d completed...\n", round);
 
@@ -517,13 +518,7 @@ void distributor(chanend c_in, chanend c_out, chanend fromAcc, chanend fromButto
                   patternLED = 2;
                   toLED <: patternLED;
                   printf("Reading out map.\n");
-
-//                  if ((round % 2) == 0){
-//                      readOutMap(image, c_out);
-//                  }
-//                  else {
-//                      readOutMap(image, c_out);
-//                  }
+                  readOutMap(image, c_out);
                   patternLED = 0;
                   toLED <: patternLED;
               }
@@ -683,8 +678,8 @@ par {
     on tile[0] : buttonListener(buttons, c_buttons); //thread to listen for button presses
     on tile[0] : showLEDs(leds, c_LEDs);
 
-    on tile[1] : longTimer(c_timer);
-    on tile[1] : distributor(c_inIO, c_outIO, c_control, c_buttons, c_LEDs, c_timer, c_worker);//thread to coordinate work on image
+    on tile[0] : longTimer(c_timer);
+    on tile[0] : distributor(c_inIO, c_outIO, c_control, c_buttons, c_LEDs, c_timer, c_worker);//thread to coordinate work on image
     par (int i = 0; i < numberOfWorkers; i++){
         on tile[1] : worker(c_worker[i], numberOfRowsInSlice);
     }
